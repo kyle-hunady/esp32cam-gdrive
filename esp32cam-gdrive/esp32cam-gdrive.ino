@@ -41,6 +41,9 @@ void startWiFi() {
   wm.setDebugOutput(false);
   // wm.resetSettings();
   char* networkName = &cameraName[0]; // gets pointer for cameraName
+  PRINT("connect to \"");
+  PRINT(networkName);
+  PRINT("\" on your phone to enter WiFi credentials...");
   bool result = wm.autoConnect(networkName, ""); // second param is password (blank for none)
 
   if(!result) {
@@ -270,5 +273,5 @@ void setup()
 void loop()
 {
   uploadImage(captureImage());
-  delay(1000);
+  delay(60 * 60 * 1000);
 }
