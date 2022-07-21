@@ -1,24 +1,44 @@
 //////////// CHANGE THESE VALUES AS NEEDED ////////////
-#include "MySecrets.h" // this contains MY_SCRIPT macro (not included in repo for security). Delete if desired
+#include "MySecrets.h" // contains MY_SCRIPT macro (not included in repo for security). Delete if desired
 #define DEBUG // comment to disable serial print
 String cameraName = "CAM0";
-String script = MY_SCRIPT;
-// e.g.: String script = "/macros/s/ASLKJDFxkJOIASFvDLSKJxLv.../exec
+String script = MY_SCRIPT; //e.g. "/macros/s/ASLKJDFxkJOIASFvDLSKJxLv.../exec"
 ///////////////////////////////////////////////////////
 
 // parameters to be sent to the GApps Script
 String folderName = "&folderName="; // defaults to cameraName
-String fileName = "&fileName=";     // defaults to cameraName (GApps Script adds timestamp)
+String fileName = "&fileName=";     // defaults to frameSize (GApps Script adds timestamp)
 String file = "&file="; // leave blank; it's modified when uploading to GDrive
 
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <WiFiManager.h>
 #include "soc/soc.h"
-#include "soc/rtc_cntl_reg.h"
-#include "Base64.h"
-#include "CameraPins.h"
+#include "soc/rtc_cntl_reg.h" // allows disabling brown-out detection
+#include "Base64.h" // converts image data to base 64 format (for uploading)
+#include "CameraPins.h" // stores hardware pin assignments
 #include "esp_camera.h"
+
+// image resolutions to iterate through
+framesize_t frameSizes[] = {
+  FRAMESIZE_96X96,    // 96x96
+  FRAMESIZE_QQVGA,    // 160x120
+  FRAMESIZE_QCIF,     // 176x144
+  FRAMESIZE_HQVGA,    // 240x176
+  FRAMESIZE_240X240,  // 240x240
+  FRAMESIZE_QVGA,     // 320x240
+  FRAMESIZE_CIF,      // 400x296
+  FRAMESIZE_HVGA,     // 480x320
+  FRAMESIZE_VGA,      // 640x480
+  FRAMESIZE_SVGA,     // 800x600
+  FRAMESIZE_XGA,      // 1024x768
+  FRAMESIZE_HD,       // 1280x720
+  FRAMESIZE_SXGA,     // 1280x1024
+  FRAMESIZE_UXGA,     // 1600x1200
+};
+
+String sizeNames[] = {"96x96","QQVGA","QCIF","HQVGA","240x240","QVGA","CIF","HVGA","VGA","SVGA","XGA","HD","SXGA","UXGA"};
+
 
 // defining macros allows you to remove Serial statements entirely
 #ifdef DEBUG    
@@ -36,13 +56,19 @@ String file = "&file="; // leave blank; it's modified when uploading to GDrive
 void startWiFi() {
   PRINT("Starting WiFi...");
   
+  
   WiFi.mode(WIFI_STA);
   WiFiManager wm;
   wm.setDebugOutput(false);
-  // wm.resetSettings();
+//  wm.resetSettings();
   char* networkName = &cameraName[0]; // gets pointer for cameraName
+  PRINT("connect to \"");
+  PRINT(networkName);
+  PRINT("\" on your phone to enter WiFi credentials...");
   bool result = wm.autoConnect(networkName, ""); // second param is password (blank for none)
-
+  
+  
+  
   if(!result) {
     PRINTLN("failed");
     ESP.restart();
@@ -52,6 +78,11 @@ void startWiFi() {
     PRINT("STA IP address: ");
     PRINTLN(WiFi.localIP()); 
   }
+}
+
+void setFrameSize(framesize_t frameSize) {
+  sensor_t * s = esp_camera_sensor_get();
+  s->set_framesize(s, frameSize);
 }
 
 void startCamera() {
@@ -99,8 +130,7 @@ void startCamera() {
   }
 
   //drop down frame size for higher initial frame rate
-  sensor_t * s = esp_camera_sensor_get();
-  s->set_framesize(s, FRAMESIZE_UXGA);  // UXGA|SXGA|XGA|SVGA|VGA|CIF|QVGA|HQVGA|QQVGA
+  setFrameSize(FRAMESIZE_96X96);  // UXGA|SXGA|XGA|SVGA|VGA|CIF|QVGA|HQVGA|QQVGA
 }
 
 // unused
@@ -169,7 +199,7 @@ bool uploadImage(camera_fb_t* fb) {
   
   PRINT("Connecting to " + String(scriptDomain) + "...");
   WiFiClientSecure clientTCP;
-  clientTCP.setInsecure();   //run version 1.0.5 or above
+  clientTCP.setInsecure(); // needed; otherwise won't connect to script.google.com
 
   // 443 is standard port for transmission control protocol (TCP)
   if (clientTCP.connect(scriptDomain, 443)) {
@@ -204,8 +234,8 @@ bool uploadImage(camera_fb_t* fb) {
 
     // add segments
     imageFile += firstSegment + secondSegment;
-    
-    String params = folderName+fileName+file;
+   
+    String params = folderName + fileName + file;
     
     clientTCP.println("POST " + script + " HTTP/1.1");
     clientTCP.println("Host: " + String(scriptDomain));
@@ -254,14 +284,14 @@ bool uploadImage(camera_fb_t* fb) {
 }
 
 void setup()
-{ // disable brown-out detection (WiFi and camera can cause voltage drops)
-  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+{
+  // disable brown-out detection (WiFi and camera can cause voltage drops)
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); 
   
   DEBUG_BEGIN(115200);
   delay(10);
 
   folderName += cameraName;
-  fileName += cameraName + ".jpg";
 
   startWiFi();
   startCamera();
@@ -269,6 +299,24 @@ void setup()
 
 void loop()
 {
-  uploadImage(captureImage());
-  delay(1000);
+  String emptyFileName = fileName;  
+  int len = sizeof(frameSizes)/sizeof(frameSizes[0]);
+  
+  for (int i = 0; i < len; i++) {
+    
+    framesize_t frameSize = frameSizes[i];
+    String sizeName = sizeNames[i];
+
+    PRINT("FRAMESIZE: ");
+    PRINTLN(sizeName);
+
+    fileName += sizeName + ".jpg";
+    
+    setFrameSize(frameSize);
+    for (int n = 0; n < 3; n++) {
+      uploadImage(captureImage());
+    }
+    fileName = emptyFileName;
+    delay(2000);
+  }  
 }
