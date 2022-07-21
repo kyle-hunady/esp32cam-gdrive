@@ -12,9 +12,7 @@ function doPost(e) {
   var data = file.substring(file.indexOf(",")+1);
 
   // report to Google Docs log for debugging
-  var message = `FILE: ${file.substring(0,40)}\n\
-                TYPE: ${contentType}\n\
-                DATA: ${file.substring(0,20)}`;
+  var message = `FILE: ${file.substring(0,40)}\nTYPE: ${contentType}\nDATA: ${data.substring(0,40)}`;
   log(message); // you can disable this
   
   // find folder or create if does not exist
@@ -64,24 +62,36 @@ function log(message) {
   var folder = getDriveFolder(baseFolder);
   var files = folder.getFiles();
   
-
-  var docFound = false;
-  var doc;
+  var id = null;
 
   // open log document if exists in baseFolder; otherwise, create a new one
   while (files.hasNext()) {
     var file = files.next();
     var fileType = file.getMimeType();
-    // check that fileName = 'log' and fileType = google-apps.document
-    if(file.getName() == fileName && fileType == 'application/vnd.google-apps.document'){
-      doc = DocumentApp.openById(file.getId());
-      docFound = true;
+
+    // check that if file is a Google Doc named fileName
+    if(file.getName() == fileName && fileType == MimeType.GOOGLE_DOCS){
+      id = file.getId();
     }
   }
-  if (!docFound) doc = DocumentApp.create(fileName);
+
+  // open, or create if does not exist
+  var doc;
+  if (id) {
+    doc = DocumentApp.openById(id)
+  } else {
+    doc = DocumentApp.create(fileName);
+
+    // move document from root to baseFolder
+    var docFile = DriveApp.getFileById(doc.getId());
+    folder.addFile(docFile);
+
+    // remove root copy
+    DriveApp.getRootFolder().removeFile(docFile);
+  }
 
   // write message to log (newest first)
   var body = doc.getBody();
-  var dateTime = Utilities.formatDate(new Date(), "GMT", "yyyy-MM-dd-hh-mm-ss");
+  var dateTime = Utilities.formatDate(new Date(), "GMT", "yyyy-MM-dd-hh:mm:ss");
   body.insertParagraph(0, dateTime + ": " + message); // 0 inserts at top line in document
 }
