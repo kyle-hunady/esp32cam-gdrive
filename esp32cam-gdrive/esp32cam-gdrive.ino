@@ -6,6 +6,7 @@ String script = MY_SCRIPT;
 
 long captureDelay = 1000; // ms
 long initDelay = 8000; // ms
+int numDummyImages = 3; // works after init delay to remove poorly exposed images
 #define DEBUG // comment to disable serial print
 ///////////////////////////////////////////////////////
 
@@ -60,6 +61,11 @@ void startWiFi() {
   }
 }
 
+void wait(long duration) {
+  long start = millis();
+  while (millis() - start < duration) {}//do nothing
+}
+
 void startCamera() {
   camera_config_t cameraConfig;
   cameraConfig.ledc_channel = LEDC_CHANNEL_0;
@@ -101,23 +107,25 @@ void startCamera() {
   esp_err_t err = esp_camera_init(&cameraConfig);
   if (err != ESP_OK) {
     PRINTF("Camera init failed with error 0x%x", err);
-    delay(1000);
     ESP.restart();
   }
 
   // set desired frame size
   sensor_t * s = esp_camera_sensor_get();
-  s->set_framesize(s, FRAMESIZE_SXGA);  // UXGA|SXGA|XGA|SVGA|VGA|CIF|QVGA|HQVGA|QQVGA 
+  s->set_framesize(s, FRAMESIZE_UXGA);  // UXGA|SXGA|XGA|SVGA|VGA|CIF|QVGA|HQVGA|QQVGA 
 
-  // wait before capturing 
-  long start = millis();
-  PRINTLN("Waiting " + String(initDelay) + "ms after init..."); // 8sec delay + 3 dummy captures seems to work on SXGA
-  while (millis() - start < initDelay) {}
-  for (int i = 0; i < 3; i++) {
+  // wait before capturing to allow auto-exposure to adjust (discussed in https://github.com/espressif/esp32-camera/issues/314)
+  // higher resolutions will take longer
+  PRINTLN("Waiting " + String(initDelay) + "ms after init..."); // 8sec delay + 3 dummy captures seems to work on UXGA framesize
+  wait(initDelay);
+  PRINTLN("Capturing " + String(numDummyImages) + " dummy images...");
+  for (int i = 0; i < numDummyImages; i++) {
     camera_fb_t* fb = esp_camera_fb_get(); 
     esp_camera_fb_return(fb);
   }
 }
+
+
 
 // unused
 void turnOnLight() {
@@ -247,7 +255,7 @@ bool uploadImage(camera_fb_t* fb) {
     while ((startTime + waitTime) > millis())
     {
       PRINT(".");
-      delay(100);     
+      wait(100);     
       
       while (clientTCP.available()) {
         char c = clientTCP.read();
@@ -285,12 +293,12 @@ bool uploadImage(camera_fb_t* fb) {
   }  
 }
 
-void setup()
-{ // disable brown-out detection (WiFi and camera can cause voltage drops)
+void setup() {
+  // disable brown-out detection (WiFi and camera can cause voltage drops)
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
   
   DEBUG_BEGIN(115200);
-  delay(10);
+  wait(10);
 
   folderName += cameraName;
   fileName += cameraName + ".jpg";
@@ -299,8 +307,7 @@ void setup()
   startWiFi();
 }
 
-void loop()
-{
+void loop() {
   uploadImage(captureImage());
-  delay(captureDelay);
+  wait(captureDelay);
 }
