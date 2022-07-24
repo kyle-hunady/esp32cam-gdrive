@@ -1,9 +1,12 @@
 //////////// CHANGE THESE VALUES AS NEEDED ////////////
 #include "MySecrets.h" // this contains MY_SCRIPT macro (not included in repo for security). Delete if desired
-#define DEBUG // comment to disable serial print
 String cameraName = "CAM0";
 String script = MY_SCRIPT;
-// e.g.: String script = "/macros/s/ASLKJDFxkJOIASFvDLSKJxLv.../exec
+// e.g.: String script = "/macros/s/ASLKJDFxkJOIASFvDLSKJxLv.../exec"
+
+long captureDelay = 1000; // ms
+long initDelay = 8000; // ms
+#define DEBUG // comment to disable serial print
 ///////////////////////////////////////////////////////
 
 // parameters to be sent to the GApps Script
@@ -79,6 +82,7 @@ void startCamera() {
   cameraConfig.pin_reset = RESET_GPIO_NUM;
   cameraConfig.xclk_freq_hz = 20000000;
   cameraConfig.pixel_format = PIXFORMAT_JPEG;
+  cameraConfig.grab_mode = CAMERA_GRAB_LATEST; // important for ensuring correct image is pulled from buffer
   
   //init with high specs to pre-allocate larger buffers
   if(psramFound()){
@@ -93,7 +97,7 @@ void startCamera() {
     cameraConfig.fb_count = 1;
   }
 
-  // camera init
+  // initialize camera
   esp_err_t err = esp_camera_init(&cameraConfig);
   if (err != ESP_OK) {
     PRINTF("Camera init failed with error 0x%x", err);
@@ -101,9 +105,18 @@ void startCamera() {
     ESP.restart();
   }
 
-  //drop down frame size for higher initial frame rate
+  // set desired frame size
   sensor_t * s = esp_camera_sensor_get();
-  s->set_framesize(s, FRAMESIZE_UXGA);  // UXGA|SXGA|XGA|SVGA|VGA|CIF|QVGA|HQVGA|QQVGA
+  s->set_framesize(s, FRAMESIZE_SXGA);  // UXGA|SXGA|XGA|SVGA|VGA|CIF|QVGA|HQVGA|QQVGA 
+
+  // wait before capturing 
+  long start = millis();
+  PRINTLN("Waiting " + String(initDelay) + "ms after init..."); // 8sec delay + 3 dummy captures seems to work on SXGA
+  while (millis() - start < initDelay) {}
+  for (int i = 0; i < 3; i++) {
+    camera_fb_t* fb = esp_camera_fb_get(); 
+    esp_camera_fb_return(fb);
+  }
 }
 
 // unused
@@ -154,6 +167,7 @@ String urlEncode(String str)
 }
 
 camera_fb_t* captureImage() {
+  
   PRINT("Capturing image...");
   camera_fb_t * fb = NULL;
   fb = esp_camera_fb_get();  
@@ -225,29 +239,44 @@ bool uploadImage(camera_fb_t* fb) {
     
     int waitTime = 10000;   // timeout 10 seconds
     long startTime = millis();
-    boolean state = false;
-    
+    boolean isNewLine = false;
+    boolean foundSpace = false; 
+
+    String htmlCode = "";
+    int digitCounter = 0;
     while ((startTime + waitTime) > millis())
     {
       PRINT(".");
-      delay(100);      
-      while (clientTCP.available()) 
-      {
-          char c = clientTCP.read();
-          if (state==true) getBody += String(c);        
-          if (c == '\n') 
-          {
-            if (getAll.length()==0) state=true; 
-            getAll = "";
-          } 
-          else if (c != '\r')
-            getAll += String(c);
-          startTime = millis();
-       }
-       if (getBody.length()>0) break;
+      delay(100);     
+      
+      while (clientTCP.available()) {
+        char c = clientTCP.read();
+        if (foundSpace) {
+          htmlCode += String(c);
+          digitCounter++;
+        }
+        if (digitCounter == 3) break;
+        if (c == ' ') {foundSpace = true;}
+      }
+      if (htmlCode.length()>0) break;
+//      while (clientTCP.available()) 
+//      {
+//          char c = clientTCP.read();
+//          if (isNewLine==true) getBody += String(c);
+//          // if char is newline,         
+//          if (c == '\n') 
+//          {
+//            if (getAll.length()==0) isNewLine=true; 
+//            getAll = "";
+//          } 
+//          else if (c != '\r') // \r is carriage return - ignore to prevent overwriting data
+//            getAll += String(c);
+//          startTime = millis();
+//       }
+//       if (getBody.length()>0) break;
     }
     clientTCP.stop();
-    PRINTLN(getBody);
+    PRINTLN(htmlCode);
     return true;
   }
   else {
@@ -266,12 +295,12 @@ void setup()
   folderName += cameraName;
   fileName += cameraName + ".jpg";
 
-  startWiFi();
   startCamera();
+  startWiFi();
 }
 
 void loop()
 {
   uploadImage(captureImage());
-  delay(60 * 60 * 1000);
+  delay(captureDelay);
 }
