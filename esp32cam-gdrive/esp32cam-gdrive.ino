@@ -1,20 +1,3 @@
-//////////// CHANGE THESE VALUES AS NEEDED ////////////
-#include "MySecrets.h" // this contains MY_SCRIPT macro (not included in repo for security). Delete if desired
-String cameraName = "CAM0";
-String script = MY_SCRIPT;
-// e.g.: String script = "/macros/s/ASLKJDFxkJOIASFvDLSKJxLv.../exec"
-
-long captureDelay = 1000; // ms
-long initDelay = 8000; // ms
-int numDummyImages = 3; // works after init delay to remove poorly exposed images
-#define DEBUG // comment to disable serial print
-///////////////////////////////////////////////////////
-
-// parameters to be sent to the GApps Script
-String folderName = "&folderName="; // defaults to cameraName
-String fileName = "&fileName=";     // defaults to cameraName (GApps Script adds timestamp)
-String file = "&file="; // leave blank; it's modified when uploading to GDrive
-
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <WiFiManager.h>
@@ -24,7 +7,48 @@ String file = "&file="; // leave blank; it's modified when uploading to GDrive
 #include "CameraPins.h"
 #include "esp_camera.h"
 
-// defining macros allows you to remove Serial statements entirely
+//////////// CHANGE THESE VALUES AS NEEDED ////////////
+#include "MySecrets.h" // this contains MY_SCRIPT macro (not included in repo for security). Delete if desired
+
+String cameraName = "CAM0";
+String script = MY_SCRIPT;
+// e.g.: String script = "/macros/s/ASLKJDFxkJOIASFvDLSKJxLv.../exec"
+
+framesize_t frameSize = FRAMESIZE_UXGA; // lower res is more stable
+long captureDelay = 1000; // ms
+#define DEBUG // comment to disable serial print
+///////////////////////////////////////////////////////
+
+////////////////////// FRAMESIZES /////////////////////
+//FRAMESIZE_96X96    // 96x96
+//FRAMESIZE_QQVGA    // 160x120
+//FRAMESIZE_QCIF     // 176x144
+//FRAMESIZE_HQVGA    // 240x176
+//FRAMESIZE_240X240  // 240x240
+//FRAMESIZE_QVGA     // 320x240
+//FRAMESIZE_CIF      // 400x296
+//FRAMESIZE_HVGA     // 480x320
+//FRAMESIZE_VGA      // 640x480
+//FRAMESIZE_SVGA     // 800x600
+//FRAMESIZE_XGA      // 1024x768
+//FRAMESIZE_HD       // 1280x720
+//FRAMESIZE_SXGA     // 1280x1024
+//FRAMESIZE_UXGA     // 1600x1200
+///////////////////////////////////////////////////////
+
+///////////////// CUSTOM GLOBAL VALUES ////////////////
+long initDelay = 8000; // ms
+int numDummyImages = 3; // works after init delay to remove poorly exposed images
+///////////////////////////////////////////////////////
+
+int captureCount = 0; // number of successful image uploads
+
+// parameters to be sent to the GApps Script
+String folderName = "&folderName="; // defaults to cameraName
+String fileName = "&fileName=";     // defaults to cameraName (GApps Script adds timestamp)
+String file = "&file=";             // will hold base64 encoded jpeg image
+
+// macros allow you to remove print statements easily when debugging is no longer needed
 #ifdef DEBUG    
   #define DEBUG_BEGIN(...)    Serial.begin(__VA_ARGS__)
   #define PRINT(...)          Serial.print(__VA_ARGS__)     
@@ -37,6 +61,53 @@ String file = "&file="; // leave blank; it's modified when uploading to GDrive
   #define PRINTF(...)
 #endif
 
+/////////////////// HELPER FUNCTIONS //////////////////
+void turnOnLight() { // unused
+  ledcAttachPin(4, 3);
+  ledcSetup(3, 5000, 8);
+  ledcWrite(3,10);
+}
+
+void turnOffLight() { // unused
+  ledcWrite(3,0);
+  ledcDetachPin(3);
+}
+
+String urlEncode(String str) {
+    String encodedString="";
+    char c;
+    char code0;
+    char code1;
+    char code2;
+    for (int i =0; i < str.length(); i++){
+      c=str.charAt(i);
+      if (c == ' '){
+        encodedString+= '+';
+      } else if (isalnum(c)){
+        encodedString+=c;
+      } else{
+        code1=(c & 0xf)+'0';
+        if ((c & 0xf) >9){
+            code1=(c & 0xf) - 10 + 'A';
+        }
+        c=(c>>4)&0xf;
+        code0=c+'0';
+        if (c > 9){
+            code0=c - 10 + 'A';
+        }
+        code2='\0';
+        encodedString+='%';
+        encodedString+=code0;
+        encodedString+=code1;
+        //encodedString+=code2;
+      }
+//      yield();
+    }
+    return encodedString;
+}
+///////////////// END HELPER FUNCTIONS ////////////////
+
+//////////////////// INIT FUNCTIONS ///////////////////
 void startWiFi() {
   PRINT("Starting WiFi...");
   
@@ -112,68 +183,24 @@ void startCamera() {
 
   // set desired frame size
   sensor_t * s = esp_camera_sensor_get();
-  s->set_framesize(s, FRAMESIZE_UXGA);  // UXGA|SXGA|XGA|SVGA|VGA|CIF|QVGA|HQVGA|QQVGA 
+  s->set_framesize(s, frameSize);  // UXGA|SXGA|XGA|SVGA|VGA|CIF|QVGA|HQVGA|QQVGA 
 
   // wait before capturing to allow auto-exposure to adjust (discussed in https://github.com/espressif/esp32-camera/issues/314)
   // higher resolutions will take longer
-  PRINTLN("Waiting " + String(initDelay) + "ms after init..."); // 8sec delay + 3 dummy captures seems to work on UXGA framesize
+  PRINT("Waiting " + String(initDelay) + "ms after init..."); // 8sec delay + 3 dummy captures seems to work on UXGA framesize
   wait(initDelay);
-  PRINTLN("Capturing " + String(numDummyImages) + " dummy images...");
+  PRINTLN("done");
+  
+  PRINT("Capturing " + String(numDummyImages) + " dummy images...");
   for (int i = 0; i < numDummyImages; i++) {
     camera_fb_t* fb = esp_camera_fb_get(); 
     esp_camera_fb_return(fb);
   }
+  PRINTLN("done");
 }
+////////////////// END INIT FUNCTIONS /////////////////
 
-
-
-// unused
-void turnOnLight() {
-  ledcAttachPin(4, 3);
-  ledcSetup(3, 5000, 8);
-  ledcWrite(3,10);
-}
-
-// unused
-void turnOffLight() {
-  ledcWrite(3,0);
-  ledcDetachPin(3);
-}
-
-String urlEncode(String str)
-{
-    String encodedString="";
-    char c;
-    char code0;
-    char code1;
-    char code2;
-    for (int i =0; i < str.length(); i++){
-      c=str.charAt(i);
-      if (c == ' '){
-        encodedString+= '+';
-      } else if (isalnum(c)){
-        encodedString+=c;
-      } else{
-        code1=(c & 0xf)+'0';
-        if ((c & 0xf) >9){
-            code1=(c & 0xf) - 10 + 'A';
-        }
-        c=(c>>4)&0xf;
-        code0=c+'0';
-        if (c > 9){
-            code0=c - 10 + 'A';
-        }
-        code2='\0';
-        encodedString+='%';
-        encodedString+=code0;
-        encodedString+=code1;
-        //encodedString+=code2;
-      }
-      yield();
-    }
-    return encodedString;
-}
-
+///////////// CAPTURE AND UPLOAD FUNCTIONS ////////////
 camera_fb_t* captureImage() {
   
   PRINT("Capturing image...");
@@ -189,25 +216,13 @@ camera_fb_t* captureImage() {
 }
 
 bool uploadImage(camera_fb_t* fb) {
-  const char* scriptDomain = "script.google.com";
-  String getAll="", getBody = "";
-  
-  PRINT("Connecting to " + String(scriptDomain) + "...");
-  WiFiClientSecure clientTCP;
-  clientTCP.setInsecure();   //run version 1.0.5 or above
-
-  // 443 is standard port for transmission control protocol (TCP)
-  if (clientTCP.connect(scriptDomain, 443)) {
-    PRINTLN("success");
-
-    // get length of image buffer to iterate through
+  // get length of image buffer to iterate through
     int len = fb->len;
 
     // we need to split the buffer into two segments to avoid problems at high-res
     int endIndex = len / 2;
-    while (endIndex % 3 != 0) { // make sure first segment is divisible by encoding batch size (3)
-      endIndex++;
-    }
+    // make sure first segment is divisible by encoding batch size (3)
+    while (endIndex % 3 != 0) {endIndex++;}
         
     String imageFile = "data:image/jpeg;base64,"; // prefix for jpeg
     char *input = (char *)fb->buf;
@@ -229,9 +244,28 @@ bool uploadImage(camera_fb_t* fb) {
 
     // add segments
     imageFile += firstSegment + secondSegment;
+
+    PRINT("ImageFile length: ");
+    PRINTLN(imageFile.length());
+    PRINT("ImageFile: ");
+    PRINT(imageFile.substring(0,50));
+    PRINT("...");
+    PRINTLN(imageFile.substring(imageFile.length()-50,imageFile.length()));
+
+
+  
+  const char* scriptDomain = "script.google.com";
+  
+  PRINT("Connecting to " + String(scriptDomain) + "...");
+  WiFiClientSecure clientTCP;
+  clientTCP.setInsecure();   //run version 1.0.5 or above
+
+  // 443 is standard port for transmission control protocol (TCP)
+  if (clientTCP.connect(scriptDomain, 443)) {
+    PRINTLN("success");
     
-    String params = folderName+fileName+file;
-    
+    String params = folderName + fileName + file;
+    PRINT("Uploading");
     clientTCP.println("POST " + script + " HTTP/1.1");
     clientTCP.println("Host: " + String(scriptDomain));
     clientTCP.println("Content-Length: " + String(params.length()+imageFile.length()));
@@ -240,59 +274,66 @@ bool uploadImage(camera_fb_t* fb) {
     clientTCP.println();
     
     clientTCP.print(params); // sends completed folderName and fileName; file will be added in loop:
-    for (int i = 0; i < imageFile.length(); i = i+1000) {
-      clientTCP.print(imageFile.substring(i, i+1000));
+
+    int imageLength = imageFile.length();
+    for (int i = 0; i < imageLength; i = i+1000) {
+      if (i+1000 > imageLength) {
+        clientTCP.print(imageFile.substring(i, imageLength));
+      } else {
+        clientTCP.print(imageFile.substring(i, i+1000));
+      }
     }
+    
     esp_camera_fb_return(fb); // clear image from camera buffer
     
-    int waitTime = 10000;   // timeout 10 seconds
+    int waitTime = 10000; // timeout 10 seconds
     long startTime = millis();
-    boolean isNewLine = false;
-    boolean foundSpace = false; 
-
-    String htmlCode = "";
-    int digitCounter = 0;
-    while ((startTime + waitTime) > millis())
-    {
+    boolean firstNewLineFound = false;
+    String body = "";
+    
+    // wait for response
+    while ((startTime + waitTime) > millis()) {
       PRINT(".");
       wait(100);     
       
       while (clientTCP.available()) {
-        char c = clientTCP.read();
-        if (foundSpace) {
-          htmlCode += String(c);
-          digitCounter++;
-        }
-        if (digitCounter == 3) break;
-        if (c == ' ') {foundSpace = true;}
-      }
-      if (htmlCode.length()>0) break;
-//      while (clientTCP.available()) 
-//      {
-//          char c = clientTCP.read();
-//          if (isNewLine==true) getBody += String(c);
-//          // if char is newline,         
-//          if (c == '\n') 
-//          {
-//            if (getAll.length()==0) isNewLine=true; 
-//            getAll = "";
-//          } 
-//          else if (c != '\r') // \r is carriage return - ignore to prevent overwriting data
-//            getAll += String(c);
-//          startTime = millis();
-//       }
-//       if (getBody.length()>0) break;
+          char c = clientTCP.read();
+
+          // if document has started, save character
+          if (firstNewLineFound==true) {body += String(c);}
+
+          // if we find the first newline string, begin saving future characters
+          if (c == '\n' && body.length() == 0) {firstNewLineFound=true;}
+       }
+       
+       if (body.length()>0) break; // break if we have grabbed info
     }
+    
     clientTCP.stop();
-    PRINTLN(htmlCode);
-    return true;
+
+    // check if exception exists in response
+    int exceptionStart = body.indexOf("Exception:");
+    int exceptionEnd = body.indexOf("</div>", exceptionStart);
+    if (exceptionStart > 0) {
+      PRINTLN("error");
+      PRINTLN(body.substring(exceptionStart, exceptionEnd)); // print exception
+      return false;
+    } else {
+      captureCount++;
+      PRINT("success (");
+      PRINT(captureCount);
+      PRINTLN(")");
+      return true;
+    }
   }
   else {
     PRINTLN("failed");
     return false;
   }  
 }
+/////////// END CAPTURE AND UPLOAD FUNCTIONS //////////
 
+//////////////////// SETUP AND LOOP ///////////////////
 void setup() {
   // disable brown-out detection (WiFi and camera can cause voltage drops)
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
@@ -309,5 +350,8 @@ void setup() {
 
 void loop() {
   uploadImage(captureImage());
+  PRINT("Waiting " + String(captureDelay) + "ms...");
   wait(captureDelay);
+  PRINTLN("done");
 }
+////////////////// END SETUP AND LOOP /////////////////
