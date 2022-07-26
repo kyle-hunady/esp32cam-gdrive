@@ -39,7 +39,8 @@ long captureDelay = 1000; // ms
 ///////////////// CUSTOM GLOBAL VALUES ////////////////
 long initDelay = 8000; // ms
 int numDummyImages = 3; // works after init delay to remove poorly exposed images
-#define RESERVED_IMAGEFILE_BYTES 150000
+#define RESERVED_IMAGEFILE_BYTES 100000 // works well for 3 batches
+#define IMAGEFILE_BATCHES 3
 ///////////////////////////////////////////////////////
 
 int captureCount = 0; // number of successful image uploads
@@ -107,6 +108,23 @@ String urlEncode(String str) {
       yield(); // not sure what this does, so removed
     }
     return encodedString;
+}
+
+// prints message through wifi client
+void clientPrint(WiFiClientSecure& clientTCP, const String& msg) {
+  // note use of &; these are references
+  // they allow you to use the variable you input rather than create a new instance (therefore save memory)
+  // but be careful: modifications to them will change the original variable
+  // use const to ensure they won't be modified
+  
+  int msgLength = msg.length();
+  for (int i = 0; i < msgLength; i = i+1000) {
+    if (i+1000 > msgLength) {
+      clientTCP.print(msg.substring(i, msgLength));
+    } else {
+      clientTCP.print(msg.substring(i, i+1000));
+    }
+  }
 }
 
 #ifdef DEBUG
@@ -232,66 +250,70 @@ camera_fb_t* captureImage() {
   }
 }
 
-int getImageFileLength(camera_fb_t* fb) {
-  // get length of image buffer to iterate through
-
-    int len = fb->len;
-    int imageFileLength = 0;
+int getImageFileLength(camera_fb_t* fb, WiFiClientSecure& clientTCP, const bool printToClient) {
   
-    // we need to split the buffer into two segments to avoid problems at high-res
-    int endIndex = len / 2;
-    // make sure first segment is divisible by encoding batch size (3)
-    while (endIndex % 3 != 0) {endIndex++;}
-        
-    String imageFile = "data:image/jpeg;base64,"; // prefix for jpeg
-    char *input = (char *)fb->buf;
-    char output[base64_enc_len(3)];
+  int totalLength = 0;
+
+  const int base64EncodeBatchSize = 3; // not to be confused with an imageFile batchSize
+  char *input = (char *)fb->buf; // pointer to image (frame) buffer
+  char output[base64_enc_len(base64EncodeBatchSize)]; // char array initialized with a known size (when batchSize of data is encoded to base64)
+  int len = fb->len; // length of frame buffer
+
+  int batchSize = len/IMAGEFILE_BATCHES;
+  while (batchSize % base64EncodeBatchSize != 0) {batchSize++;} // keep batchSize divisible by base64EncodeBatchSize
+
+  // create array of indicies where one batch ends and another begins
+  // for example, if the frame buffer is 100,000 long, and we have 3 batches, batchSize = 33333, indicies = [33333, 66666]
+  int indicies[IMAGEFILE_BATCHES - 1];
+  for (int i = 0; i < IMAGEFILE_BATCHES - 1; i++) {
+    indicies[i] = batchSize * (i + 1);
+  }
+
+  // initialize imageFile string (it will contain image data, so it will be large!)
+  String imageFile;
+  imageFile.reserve(RESERVED_IMAGEFILE_BYTES); // set aside space for imageFile
+  imageFile += "data:image/jpeg;base64,"; // prefix for jpeg
+
+  int currentBatch = 0;
   
-    // grab first segment
-    for (int i=0; i <= endIndex; i++) {
-      base64_encode(output, (input++), 3);
-      if (i%3==0) imageFile += urlEncode(String(output));
-    }
+  // print frame buffer to wifi client
+  for (int i=0; i <= len; i++) {
+    base64_encode(output, (input++), base64EncodeBatchSize);
 
-    imageFileLength += imageFile.length();
-    
-    // grab second segment
-    imageFile = "";
-    for (int i=endIndex + 1; i < len; i++) {
-      base64_encode(output, (input++), 3);
-      if (i%3==0) imageFile += urlEncode(String(output));
-    }
+    // do url encoding on every base64 batch
+    if (i % base64EncodeBatchSize == 0) {imageFile += urlEncode(String(output));}
 
-    imageFileLength += imageFile.length();
-
-    PRINT(F("ImageFile Length: "));
-    PRINTLN(imageFileLength);
-    return imageFileLength;
-}
-
-void clientPrint(WiFiClientSecure& clientTCP, String& msg) {
-  int msgLength = msg.length();
-  for (int i = 0; i < msgLength; i = i+1000) {
-    if (i+1000 > msgLength) {
-      clientTCP.print(msg.substring(i, msgLength));
-    } else {
-      clientTCP.print(msg.substring(i, i+1000));
+    // if we've reached the end of a imageFile batch, print batch and reset imageFile to save memory
+    if (i == indicies[currentBatch]) {
+      if (printToClient) {clientPrint(clientTCP, imageFile);} // print batch
+      totalLength += imageFile.length();
+      imageFile = ""; // reset
+      currentBatch++;
     }
   }
+
+  if (printToClient) {clientPrint(clientTCP, imageFile);} // print last batch
+  totalLength += imageFile.length();
+  
+  return totalLength;
 }
+
 
 bool uploadImage(camera_fb_t* fb) {  
   const char* scriptDomain = "script.google.com";
   
   PRINT("Connecting to " + String(scriptDomain) + "...");
   WiFiClientSecure clientTCP;
-  clientTCP.setInsecure();   //run version 1.0.5 or above
+  clientTCP.setInsecure(); // need insecure; won't connect to script.google.com otherwise
 
   // 443 is standard port for transmission control protocol (TCP)
   if (clientTCP.connect(scriptDomain, 443)) {
     PRINTLN("success");
-
-    int imageFileLength = getImageFileLength(fb);
+    
+    bool printToClient = false;
+    int imageFileLength = getImageFileLength(fb, clientTCP, printToClient);
+    PRINT(F("File length: "));
+    PRINTLN(imageFileLength);
     
     String params = folderName + fileName + file;
     PRINT("Uploading");
@@ -304,36 +326,9 @@ bool uploadImage(camera_fb_t* fb) {
     
     clientTCP.print(params); // sends completed folderName and fileName; file will be added in loop:
 
-    // get length of image buffer to iterate through
-    int len = fb->len;
-  
-    // we need to split the buffer into two segments to avoid problems at high-res
-    // make sure first segment is divisible by encoding batch size (3)
-    int endIndex = len / 2;
-    while (endIndex % 3 != 0) {endIndex++;}
-
-    String imageFile;
-    imageFile.reserve(RESERVED_IMAGEFILE_BYTES);
-    imageFile += "data:image/jpeg;base64,"; // prefix for jpeg
-    char *input = (char *)fb->buf;
-    char output[base64_enc_len(3)];
-  
-    // grab first segment
-    for (int i=0; i <= endIndex; i++) {
-      base64_encode(output, (input++), 3);
-      if (i%3==0) imageFile += urlEncode(String(output));
-    }
-    clientPrint(clientTCP, imageFile);
-    
-    // grab second segment
-    imageFile = "";
-    for (int i=endIndex + 1; i < len; i++) {
-      base64_encode(output, (input++), 3);
-      if (i%3==0) imageFile += urlEncode(String(output));
-    }
-
-    clientPrint(clientTCP, imageFile);
-    
+    printToClient = true;
+    getImageFileLength(fb, clientTCP, printToClient);
+        
     esp_camera_fb_return(fb); // clear image from camera buffer
     
     int waitTime = 10000; // timeout 10 seconds
@@ -345,35 +340,35 @@ bool uploadImage(camera_fb_t* fb) {
     while ((startTime + waitTime) > millis()) {
       PRINT(".");
       wait(100);     
-      
       while (clientTCP.available()) {
           char c = clientTCP.read();
-
-          // if document has started, save character
+          // if document has started, save stream
           if (firstNewLineFound==true) {body += String(c);}
-
           // if we find the first newline string, begin saving future characters
           if (c == '\n' && body.length() == 0) {firstNewLineFound=true;}
        }
-       
        if (body.length()>0) break; // break if we have grabbed info
     }
-    
     clientTCP.stop();
 
-    // check if exception exists in response
-    int exceptionStart = body.indexOf("Exception:");
-    int exceptionEnd = body.indexOf("</div>", exceptionStart);
-    if (exceptionStart > 0) {
-      PRINTLN("error");
-      PRINTLN(body.substring(exceptionStart, exceptionEnd)); // print exception
-      return false;
+    if (body.length()>0) {
+      // check if exception exists in response
+      int exceptionStart = body.indexOf("Exception:");
+      int exceptionEnd = body.indexOf("</div>", exceptionStart);
+      if (exceptionStart > 0) {
+        PRINTLN("error");
+        PRINTLN(body.substring(exceptionStart, exceptionEnd)); // print exception
+        return false;
+      } else {
+        captureCount++;
+        PRINT("success (");
+        PRINT(captureCount);
+        PRINTLN(")");
+        return true;
+      }
     } else {
-      captureCount++;
-      PRINT("success (");
-      PRINT(captureCount);
-      PRINTLN(")");
-      return true;
+      PRINT("failed (timeout)");
+      return false; // timeout
     }
   }
   else {
