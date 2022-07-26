@@ -23,6 +23,3 @@ Your images will appear in your GDrive as /baseFolder/imgFolder/timeStamp-imgNam
 The GApps Script logs data into a Google Doc to help debug issues with upload
 - The Doc is named 'log' and is placed in baseFolder
 - It can be disabled in the GApps Script
-
-## Known issue:
-First few images (typically 3) either fail to upload to show green tint. I'm not sure what's happening with that or how to fix it. Think you could help?
