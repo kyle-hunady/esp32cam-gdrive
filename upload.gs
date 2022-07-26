@@ -4,7 +4,7 @@ function doPost(e) {
   
   // grab parameters
   var folderName = e.parameter.folderName; // placed in baseFolder (e.g. parent/child/folderName/img.jpg)
-  var fileName = Utilities.formatDate(new Date(), "GMT", "yyyy-MM-dd-hh-mm-ss") + "-" + e.parameter.fileName;
+  var fileName = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd-hh-mm-ss") + "-" + e.parameter.fileName;
   var file = e.parameter.file;
 
   // parse file
@@ -12,24 +12,23 @@ function doPost(e) {
   var data = file.substring(file.indexOf(",")+1);
 
   // report to Google Docs log for debugging
-  var message = `FILE: ${file.substring(0,40)}\nTYPE: ${contentType}\nDATA: ${data.substring(0,40)}`;
+  var message = `\nFILE: ${file.substring(0,40)}\nTYPE: ${contentType}\nDATA: ${data.substring(0,40)}`;
   log(message); // you can disable this
   
   // find folder or create if does not exist
   var folder = getDriveFolder(baseFolder + folderName);
-
+  
   // convert data to image file and save to folder
   data = Utilities.base64Decode(data);
   var blob = Utilities.newBlob(data, contentType, fileName);
   var file = folder.createFile(blob);    
   file.setDescription("Uploaded by " + fileName);
-  
+
   // return info
   var imageID = file.getUrl().substring(file.getUrl().indexOf("/d/")+3,file.getUrl().indexOf("view")-1);
   var imageUrl = "https://drive.google.com/uc?authuser=0&id="+imageID;
-  return  ContentService.createTextOutput(folderName+"/"+fileName+"\n"+imageUrl);
+  return ContentService.createTextOutput(imageUrl);
 }
-
 
 // function created by Amit Agarwal: https://www.labnol.org/code/19925-google-drive-folder-path
 function getDriveFolder(path) {
@@ -54,6 +53,7 @@ function getDriveFolder(path) {
   return folder;
 }
 
+// create console log in a Google Docs (GApps does not support logging natively)
 function log(message) {
 
   var fileName = 'log'; // the name of our log file (Google Docs)
@@ -64,25 +64,25 @@ function log(message) {
   
   var id = null;
 
-  // open log document if exists in baseFolder; otherwise, create a new one
+  // find log document if exists in baseFolder
   while (files.hasNext()) {
     var file = files.next();
     var fileType = file.getMimeType();
 
-    // check that if file is a Google Doc named fileName
+    // check if file is a Google Doc named fileName
     if(file.getName() == fileName && fileType == MimeType.GOOGLE_DOCS){
       id = file.getId();
     }
   }
 
-  // open, or create if does not exist
+  // open doc, or create if does not exist
   var doc;
   if (id) {
     doc = DocumentApp.openById(id)
   } else {
     doc = DocumentApp.create(fileName);
 
-    // move document from root to baseFolder
+    // move document from root to baseFolder (saved in two locations at once)
     var docFile = DriveApp.getFileById(doc.getId());
     folder.addFile(docFile);
 
@@ -92,6 +92,6 @@ function log(message) {
 
   // write message to log (newest first)
   var body = doc.getBody();
-  var dateTime = Utilities.formatDate(new Date(), "GMT", "yyyy-MM-dd-hh:mm:ss");
+  var dateTime = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd-hh:mm:ss");
   body.insertParagraph(0, dateTime + ": " + message); // 0 inserts at top line in document
 }
