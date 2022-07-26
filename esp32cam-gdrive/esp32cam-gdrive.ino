@@ -39,6 +39,7 @@ long captureDelay = 1000; // ms
 ///////////////// CUSTOM GLOBAL VALUES ////////////////
 long initDelay = 8000; // ms
 int numDummyImages = 3; // works after init delay to remove poorly exposed images
+#define RESERVED_IMAGEFILE_BYTES 150000
 ///////////////////////////////////////////////////////
 
 int captureCount = 0; // number of successful image uploads
@@ -61,7 +62,9 @@ String file = "&file=";             // will hold base64 encoded jpeg image
   #define PRINTF(...)
 #endif
 
+///////////////////////////////////////////////////////
 /////////////////// HELPER FUNCTIONS //////////////////
+///////////////////////////////////////////////////////
 void turnOnLight() { // unused
   ledcAttachPin(4, 3);
   ledcSetup(3, 5000, 8);
@@ -101,13 +104,23 @@ String urlEncode(String str) {
         encodedString+=code1;
         //encodedString+=code2;
       }
-//      yield();
+      yield(); // not sure what this does, so removed
     }
     return encodedString;
 }
-///////////////// END HELPER FUNCTIONS ////////////////
 
+#ifdef DEBUG
+String getSummary(String msg) {
+  return (msg.substring(0,50) + "..." + msg.substring(msg.length()-50,msg.length()));
+}
+#endif
+///////////////////////////////////////////////////////
+///////////////// END HELPER FUNCTIONS ////////////////
+///////////////////////////////////////////////////////
+
+///////////////////////////////////////////////////////
 //////////////////// INIT FUNCTIONS ///////////////////
+///////////////////////////////////////////////////////
 void startWiFi() {
   PRINT("Starting WiFi...");
   
@@ -198,9 +211,13 @@ void startCamera() {
   }
   PRINTLN("done");
 }
+///////////////////////////////////////////////////////
 ////////////////// END INIT FUNCTIONS /////////////////
+///////////////////////////////////////////////////////
 
+///////////////////////////////////////////////////////
 ///////////// CAPTURE AND UPLOAD FUNCTIONS ////////////
+///////////////////////////////////////////////////////
 camera_fb_t* captureImage() {
   
   PRINT("Capturing image...");
@@ -215,10 +232,12 @@ camera_fb_t* captureImage() {
   }
 }
 
-bool uploadImage(camera_fb_t* fb) {
+int getImageFileLength(camera_fb_t* fb) {
   // get length of image buffer to iterate through
-    int len = fb->len;
 
+    int len = fb->len;
+    int imageFileLength = 0;
+  
     // we need to split the buffer into two segments to avoid problems at high-res
     int endIndex = len / 2;
     // make sure first segment is divisible by encoding batch size (3)
@@ -227,33 +246,41 @@ bool uploadImage(camera_fb_t* fb) {
     String imageFile = "data:image/jpeg;base64,"; // prefix for jpeg
     char *input = (char *)fb->buf;
     char output[base64_enc_len(3)];
-
+  
     // grab first segment
-    String firstSegment = "";
     for (int i=0; i <= endIndex; i++) {
       base64_encode(output, (input++), 3);
-      if (i%3==0) firstSegment += urlEncode(String(output));
+      if (i%3==0) imageFile += urlEncode(String(output));
     }
 
+    imageFileLength += imageFile.length();
+    
     // grab second segment
-    String secondSegment = "";
+    imageFile = "";
     for (int i=endIndex + 1; i < len; i++) {
       base64_encode(output, (input++), 3);
-      if (i%3==0) secondSegment += urlEncode(String(output));
+      if (i%3==0) imageFile += urlEncode(String(output));
     }
 
-    // add segments
-    imageFile += firstSegment + secondSegment;
+    imageFileLength += imageFile.length();
 
-    PRINT("ImageFile length: ");
-    PRINTLN(imageFile.length());
-    PRINT("ImageFile: ");
-    PRINT(imageFile.substring(0,50));
-    PRINT("...");
-    PRINTLN(imageFile.substring(imageFile.length()-50,imageFile.length()));
+    PRINT(F("ImageFile Length: "));
+    PRINTLN(imageFileLength);
+    return imageFileLength;
+}
 
+void clientPrint(WiFiClientSecure& clientTCP, String& msg) {
+  int msgLength = msg.length();
+  for (int i = 0; i < msgLength; i = i+1000) {
+    if (i+1000 > msgLength) {
+      clientTCP.print(msg.substring(i, msgLength));
+    } else {
+      clientTCP.print(msg.substring(i, i+1000));
+    }
+  }
+}
 
-  
+bool uploadImage(camera_fb_t* fb) {  
   const char* scriptDomain = "script.google.com";
   
   PRINT("Connecting to " + String(scriptDomain) + "...");
@@ -263,26 +290,49 @@ bool uploadImage(camera_fb_t* fb) {
   // 443 is standard port for transmission control protocol (TCP)
   if (clientTCP.connect(scriptDomain, 443)) {
     PRINTLN("success");
+
+    int imageFileLength = getImageFileLength(fb);
     
     String params = folderName + fileName + file;
     PRINT("Uploading");
     clientTCP.println("POST " + script + " HTTP/1.1");
     clientTCP.println("Host: " + String(scriptDomain));
-    clientTCP.println("Content-Length: " + String(params.length()+imageFile.length()));
+    clientTCP.println("Content-Length: " + String(params.length()+imageFileLength));
     clientTCP.println("Content-Type: application/x-www-form-urlencoded");
     clientTCP.println("Connection: keep-alive");
     clientTCP.println();
     
     clientTCP.print(params); // sends completed folderName and fileName; file will be added in loop:
 
-    int imageLength = imageFile.length();
-    for (int i = 0; i < imageLength; i = i+1000) {
-      if (i+1000 > imageLength) {
-        clientTCP.print(imageFile.substring(i, imageLength));
-      } else {
-        clientTCP.print(imageFile.substring(i, i+1000));
-      }
+    // get length of image buffer to iterate through
+    int len = fb->len;
+  
+    // we need to split the buffer into two segments to avoid problems at high-res
+    // make sure first segment is divisible by encoding batch size (3)
+    int endIndex = len / 2;
+    while (endIndex % 3 != 0) {endIndex++;}
+
+    String imageFile;
+    imageFile.reserve(RESERVED_IMAGEFILE_BYTES);
+    imageFile += "data:image/jpeg;base64,"; // prefix for jpeg
+    char *input = (char *)fb->buf;
+    char output[base64_enc_len(3)];
+  
+    // grab first segment
+    for (int i=0; i <= endIndex; i++) {
+      base64_encode(output, (input++), 3);
+      if (i%3==0) imageFile += urlEncode(String(output));
     }
+    clientPrint(clientTCP, imageFile);
+    
+    // grab second segment
+    imageFile = "";
+    for (int i=endIndex + 1; i < len; i++) {
+      base64_encode(output, (input++), 3);
+      if (i%3==0) imageFile += urlEncode(String(output));
+    }
+
+    clientPrint(clientTCP, imageFile);
     
     esp_camera_fb_return(fb); // clear image from camera buffer
     
@@ -331,9 +381,13 @@ bool uploadImage(camera_fb_t* fb) {
     return false;
   }  
 }
+///////////////////////////////////////////////////////
 /////////// END CAPTURE AND UPLOAD FUNCTIONS //////////
+///////////////////////////////////////////////////////
 
+///////////////////////////////////////////////////////
 //////////////////// SETUP AND LOOP ///////////////////
+///////////////////////////////////////////////////////
 void setup() {
   // disable brown-out detection (WiFi and camera can cause voltage drops)
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
@@ -354,4 +408,6 @@ void loop() {
   wait(captureDelay);
   PRINTLN("done");
 }
+///////////////////////////////////////////////////////
 ////////////////// END SETUP AND LOOP /////////////////
+///////////////////////////////////////////////////////
