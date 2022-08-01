@@ -8,7 +8,7 @@ Periodically upload photos from an ESP32CAM to Google Drive.
 3) Deploy > allow all access > authorize for your account
 
 ### 2) Add Google Apps Script to Arduino program
-1) Copy script macro string > place into "esp32cam-gdrive.ino"
+1) In Google Apps deploy, copy script macro string > place into "esp32cam-gdrive.ino"
 
 ### 3) Upload and connect your ESP32 to WiFi through your phone
 1) On first upload, connect to your ESP32's hotspot (default name: CAM0)
