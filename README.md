@@ -1,5 +1,5 @@
 # esp32cam-gdrive
-Periodically upload photos from an ESP32CAM to Google Drive. This code is implements a fix over other repos to upload the highest resolution (UXGA).
+Periodically upload photos from an ESP32CAM to Google Drive. This code implements a fix over other repos to upload the highest resolution (UXGA).
 
 ## Steps:
 ### 1) Set up the Google Apps Script to receive images
